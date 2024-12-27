@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-start-rgb));
+}
+
+/* Custom styles for the canvas */
+.canvas-container {
+  width: 100% !important;
+  height: auto !important;
+  position: relative !important;
+}
+
+.upper-canvas, .lower-canvas {
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Game-specific styles */
+.tool-active {
+  @apply bg-blue-500 text-white;
+}
+
+.user-score {
+  @apply text-sm text-gray-600;
+}
+
+.game-word {
+  @apply text-xl font-bold text-blue-600;
+}
+
+.timer {
+  @apply text-lg font-semibold text-red-500;
+}
+
+/* Animation for correct guesses */
+@keyframes correct-guess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+.correct-guess {
+  animation: correct-guess 0.5s ease-in-out;
+}
+
+/* Responsive design helpers */
+@media (max-width: 640px) {
+  .canvas-container {
+    height: 60vh !important;
+  }
+}
+
+/* Loading spinner */
+.loading-spinner {
+  @apply w-8 h-8 border-4 border-blue-200 rounded-full;
+  border-top-color: #3b82f6;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Toast notifications */
+.toast {
+  @apply fixed bottom-4 right-4 p-4 rounded-lg shadow-lg;
+  animation: slide-up 0.3s ease-out;
+}
+
+.toast-success {
+  @apply bg-green-500 text-white;
+}
+
+.toast-error {
+  @apply bg-red-500 text-white;
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Button styles */
+.game-button {
+  @apply px-4 py-2 rounded-md transition-colors duration-200;
+}
+
+.primary-button {
+  @apply game-button bg-blue-500 text-white hover:bg-blue-600;
+}
+
+.secondary-button {
+  @apply game-button bg-gray-200 text-gray-800 hover:bg-gray-300;
+}
+
+/* Input styles */
+.game-input {
+  @apply px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500;
+}
+
+/* Card styles */
+.game-card {
+  @apply bg-white rounded-lg shadow-md p-4;
+} 

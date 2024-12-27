@@ -267,6 +267,20 @@
                 font-size: 14px;
             }
         }
+
+        .game-status {
+            text-align: center;
+        }
+        #guess-input {
+            padding: 8px;
+            margin: 10px;
+            width: 200px;
+        }
+        #timer {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
     </style>
 </head>
 
@@ -298,6 +312,12 @@
                 <button class="tool-btn" id="clearBtn">Clear Canvas</button>
                 <button class="tool-btn" id="downloadBtn">Download</button>
             </div>
+            <div class="game-status" style="margin-bottom: 20px; padding: 15px; background: #f5f5f5; border-radius: 8px;">
+                <div id="game-info">Game not started</div>
+                <div id="timer"></div>
+                <input type="text" id="guess-input" placeholder="Type your guess here..." style="display: none;">
+                <button id="start-game" class="tool-btn">Start Game</button>
+            </div>
             <div id="canvas-container">
                 <div id="canvas-wrapper">
                     <canvas id="canvas"></canvas>
@@ -313,6 +333,7 @@
         let username;
         const cursors = new Map();
         let lastCursorPosition = { x: 0, y: 0 };
+        let isDrawer = false;
 
         function registerUser() {
             username = document.getElementById('username-input').value.trim();
@@ -339,6 +360,8 @@
                 skipTargetFind: false,
                 skipOffscreen: true
             });
+
+            setupCanvasListeners();
 
             window.addEventListener('resize', throttle(() => {
                 const newWidth = container.clientWidth;
@@ -558,6 +581,56 @@
             socket.on('userJoined', (data) => {
                 console.log(`${data.username} joined`);
             });
+
+            socket.on('youAreDrawing', (word) => {
+                isDrawer = true;
+                canvas.isDrawingMode = true;
+                document.getElementById('game-info').innerHTML = `Your word is: ${word}`;
+                document.getElementById('guess-input').style.display = 'none';
+                canvas.clear();
+            });
+
+            socket.on('newRound', (data) => {
+                isDrawer = false;
+                canvas.isDrawingMode = false;
+                document.getElementById('game-info').innerHTML = `${data.drawer} is drawing!`;
+                document.getElementById('guess-input').style.display = 'inline-block';
+                updateScores(data.scores);
+                canvas.clear();
+            });
+
+            socket.on('roundEnded', (data) => {
+                document.getElementById('game-info').innerHTML = `Round ended! The word was: ${data.word}`;
+                updateScores(data.scores);
+            });
+
+            socket.on('correctGuess', (data) => {
+                document.getElementById('game-info').innerHTML = 
+                    `${data.guesser} guessed correctly! The word was: ${data.word}`;
+                updateScores(data.scores);
+            });
+
+            socket.on('gameError', (message) => {
+                alert(message);
+            });
+
+            document.getElementById('start-game').addEventListener('click', () => {
+                socket.emit('startGame');
+            });
+
+            document.getElementById('guess-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const guess = e.target.value.trim();
+                    if (guess) {
+                        socket.emit('submitGuess', guess);
+                        e.target.value = '';
+                    }
+                }
+            });
+
+            socket.on('timerUpdate', (seconds) => {
+                updateTimer(seconds);
+            });
         }
 
         function emitCanvasData() {
@@ -622,6 +695,47 @@
                 canvas.requestRenderAll();
                 emitCanvasData();
             }
+        }
+
+        function setupCanvasListeners() {
+            if (!canvas) return;
+
+            canvas.on('mouse:down', (e) => {
+                if (!isDrawer) {
+                    e.e.preventDefault();
+                    return false;
+                }
+            });
+
+            canvas.on('object:added', () => {
+                if (!isDrawer) {
+                    return;
+                }
+                if (!isRemoteUpdate) {
+                    throttledEmit(JSON.stringify(canvas.toJSON()));
+                }
+            });
+        }
+
+        function updateTimer(seconds) {
+            const timerElement = document.getElementById('timer');
+            if (seconds > 0) {
+                timerElement.textContent = `Time remaining: ${seconds}s`;
+            } else {
+                timerElement.textContent = 'Times up!';
+            }
+        }
+
+        function updateScores(scores) {
+            const usersList = document.getElementById('users-list');
+            usersList.innerHTML = scores
+                .map(user => `
+                    <div class="user-item">
+                        ${user.username} ${user.isDrawing ? '✏️' : ''} 
+                        <br>Score: ${user.score || 0}
+                    </div>
+                `)
+                .join('');
         }
     </script>
 </body>
