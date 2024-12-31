@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"pages/index.js -> ../components/Whiteboard\":{\"id\":\"pages/index.js -> ../components/Whiteboard\",\"files\":[\"static/chunks/components_Whiteboard_js.js\"]}}"
