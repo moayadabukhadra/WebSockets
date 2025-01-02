@@ -82,6 +82,13 @@ export default function Whiteboard({ socket }) {
     useEffect(() => {
         if (!canvas || !socket) return;
 
+        // Add these event listeners to handle object modifications
+        canvas.on('object:modified', emitCanvasData);
+        canvas.on('object:moving', emitCanvasData);
+        canvas.on('object:scaling', emitCanvasData);
+        canvas.on('object:rotating', emitCanvasData);
+        canvas.on('path:created', emitCanvasData);
+
         const handleMouseMove = (e) => {
             if (!canvasWrapperRef.current) return;
             const rect = canvasWrapperRef.current.getBoundingClientRect();
@@ -106,12 +113,18 @@ export default function Whiteboard({ socket }) {
                     canvas.clear();
                     canvas.setBackgroundColor('white', canvas.renderAll.bind(canvas));
                 } else if (data.json) {
+                    // Preserve the current state before loading
                     const zoom = canvas.getZoom();
-                    const viewportTransform = canvas.viewportTransform;
-                    const isDrawing = canvas.isDrawingMode;
+                    const viewportTransform = [...canvas.viewportTransform];
+                    const isDrawingMode = canvas.isDrawingMode;
+                    
+                    // Temporarily disable rendering to prevent flickering
+                    canvas.renderOnAddRemove = false;
                     
                     canvas.loadFromJSON(data.json, () => {
-                        canvas.isDrawingMode = isDrawing;
+                        // Restore the previous state
+                        canvas.renderOnAddRemove = true;
+                        canvas.isDrawingMode = isDrawingMode;
                         canvas.setZoom(zoom);
                         canvas.setViewportTransform(viewportTransform);
                         canvas.renderAll();
@@ -135,6 +148,13 @@ export default function Whiteboard({ socket }) {
         setupSocketListeners();
 
         return () => {
+            // Add cleanup for the new event listeners
+            canvas.off('object:modified', emitCanvasData);
+            canvas.off('object:moving', emitCanvasData);
+            canvas.off('object:scaling', emitCanvasData);
+            canvas.off('object:rotating', emitCanvasData);
+            canvas.off('path:created', emitCanvasData);
+            
             canvasWrapperRef.current?.removeEventListener('mousemove', handleMouseMove);
             socket.off('cursor-move');
             socket.off('canvas-data');
@@ -270,7 +290,7 @@ export default function Whiteboard({ socket }) {
     const throttledEmit = useCallback(
         throttle((json) => {
             socket.emit('canvas-data', { json });
-        }, 30),
+        }, 16),
         [socket]
     );
 
