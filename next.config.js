@@ -5,9 +5,6 @@ const nextConfig = {
     config.externals = [...config.externals, { canvas: 'canvas' }];
     return config;
   },
-  webSocketServerOptions: {
-    path: '/socket.io',
-  }
 };
 
 module.exports = nextConfig; 
