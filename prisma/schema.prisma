@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
+  rounds    Int      @default(3)
+  players   Player[]
+  messages  Message[]
+  games     Game[]
+}
+
+model Player {
+  id        String    @id @default(cuid())
+  name      String
+  socketId  String?   // Optional field, no unique constraint
+  score     Int       @default(0)
+  isHost    Boolean   @default(false)
+  roomId    String
+  room      Room      @relation(fields: [roomId], references: [id])
+  messages  Message[]
+  games     Game[]    @relation("PlayerGames")
+  drawings  Game[]    @relation("DrawerGames")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([socketId, roomId])  // Composite unique constraint
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  content   String
+  type      String   @default("chat") // chat, system, correct_guess
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id])
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Game {
+  id        String   @id @default(cuid())
+  word      String
+  drawerId  String
+  drawer    Player   @relation("DrawerGames", fields: [drawerId], references: [id])
+  players   Player[] @relation("PlayerGames")
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id])
+  round     Int
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+} 

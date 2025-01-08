@@ -7,22 +7,34 @@ import Chat from './Chat';
 import PlayerList from './PlayerList';
 import ToolBar from './ToolBar';
 
-interface Player {
+interface GameRoomProps {
+  roomId: string;
+  roomCode: string;
+  playerId: string;
+  isHost: boolean;
+}
+
+type Player = {
   id: string;
   name: string;
   score: number;
-}
+};
 
-interface GameState {
+type GameState = {
   currentWord: string;
   timeLeft: number;
   roundNumber: number;
   totalRounds: number;
   drawer: string | null;
   isDrawing: boolean;
-}
+};
 
-export default function GameRoom() {
+export default function GameRoom({ 
+  roomId, 
+  roomCode, 
+  playerId, 
+  isHost 
+}: GameRoomProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [gameState, setGameState] = useState<GameState>({
@@ -33,75 +45,98 @@ export default function GameRoom() {
     drawer: null,
     isDrawing: false
   });
-  const [playerName, setPlayerName] = useState('');
-  const [gameStarted, setGameStarted] = useState(false);
   const [selectedColor, setSelectedColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(2);
+  const [error, setError] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
 
   useEffect(() => {
+    const playerName = sessionStorage.getItem('playerName');
+    if (!playerName) {
+      setError('Player session not found');
+      return;
+    }
+
     const newSocket = io('http://localhost:3000');
     setSocket(newSocket);
 
+    // Send initial connection data
+    newSocket.emit('joinGame', {
+      roomCode,
+      playerId,
+      playerName,
+      isHost
+    });
+
+    // Add all event listeners
+    newSocket.on('error', ({ message }) => {
+      console.error('Socket error:', message);
+      setError(message);
+    });
+
     newSocket.on('players', (updatedPlayers: Player[]) => {
+      console.log('Players updated:', updatedPlayers);
       setPlayers(updatedPlayers);
     });
 
     newSocket.on('gameState', (state: GameState) => {
+      console.log('Game state updated:', state);
       setGameState(state);
     });
 
+    newSocket.on('gameStarted', ({ roundNumber, totalRounds }) => {
+      console.log(`Game started! Round ${roundNumber} of ${totalRounds}`);
+      setIsStarting(false);
+    });
+
     newSocket.on('roundChange', ({ roundNumber, totalRounds }) => {
-      // You could add a round change animation here
       console.log(`Round ${roundNumber} of ${totalRounds}`);
     });
 
     newSocket.on('gameOver', ({ winner }) => {
-      // Handle game over state
       console.log(`Game Over! Winner: ${winner.name}`);
     });
 
     return () => {
       newSocket.close();
     };
-  }, []);
+  }, [roomCode, playerId, isHost]);
 
-  const joinGame = () => {
-    if (!playerName || !socket) return;
-    socket.emit('joinGame', { name: playerName });
-    setGameStarted(true);
+  const handleStartGame = async () => {
+    if (!socket || isStarting || !roomCode) return;
+    
+    setIsStarting(true);
+    socket.emit('startGame', { roomCode, playerId });
+    
+    // Reset starting state after a delay
+    setTimeout(() => setIsStarting(false), 2000);
   };
 
-  if (!gameStarted) {
+  if (error) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[80vh] gap-6">
-        <div className="bg-gray-800 p-8 rounded-lg shadow-lg max-w-md w-full">
-          <h2 className="text-2xl font-bold mb-6 text-center text-purple-400">
-            Join the Game
-          </h2>
-          <input
-            type="text"
-            placeholder="Enter your name"
-            value={playerName}
-            onChange={(e) => setPlayerName(e.target.value)}
-            className="w-full px-4 py-2 rounded bg-gray-700 text-white border border-gray-600 focus:border-purple-500 focus:outline-none mb-4"
-          />
-          <button
-            onClick={joinGame}
-            className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded font-semibold hover:opacity-90 transition-opacity"
-          >
-            Join Game
-          </button>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="bg-red-500 text-white p-4 rounded-lg">
+          Error: {error}
         </div>
       </div>
     );
   }
 
-  const isCurrentDrawer = socket?.id === gameState.drawer;
+  const isCurrentDrawer = gameState.drawer === playerId;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
       <div className="lg:col-span-3 space-y-4">
         <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+          {isHost && !gameState.drawer && (
+            <button
+              onClick={handleStartGame}
+              disabled={isStarting}
+              className="w-full mb-4 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {isStarting ? 'Starting Game...' : 'Start Game'}
+            </button>
+          )}
           {isCurrentDrawer && (
             <div className="mb-4">
               <ToolBar
@@ -118,10 +153,11 @@ export default function GameRoom() {
               isDrawing={isCurrentDrawer}
               selectedColor={selectedColor}
               brushSize={brushSize}
+              roomId={roomId}
             />
           )}
         </div>
-        {socket && <Chat socket={socket} isDrawing={isCurrentDrawer} />}
+        {socket && <Chat socket={socket} isDrawing={isCurrentDrawer} roomId={roomId} />}
       </div>
       <div className="lg:col-span-1 space-y-4">
         <div className="bg-gray-800 p-4 rounded-lg shadow-lg">

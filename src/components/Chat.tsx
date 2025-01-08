@@ -6,6 +6,7 @@ import { Socket } from 'socket.io-client';
 interface ChatProps {
   socket: Socket;
   isDrawing: boolean;
+  roomId: string;
 }
 
 interface Message {
@@ -15,7 +16,7 @@ interface Message {
   isDrawer?: boolean;
 }
 
-export default function Chat({ socket, isDrawing }: ChatProps) {
+export default function Chat({ socket, isDrawing, roomId }: ChatProps) {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);

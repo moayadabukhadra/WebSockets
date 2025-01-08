@@ -8,13 +8,15 @@ interface CanvasProps {
   isDrawing: boolean;
   selectedColor: string;
   brushSize: number;
+  roomId: string;
 }
 
 export default function Canvas({ 
   socket, 
   isDrawing, 
   selectedColor, 
-  brushSize 
+  brushSize,
+  roomId
 }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [drawing, setDrawing] = useState(false);
@@ -22,53 +24,34 @@ export default function Canvas({
   const lastPositionRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!socket) return;
 
-    canvas.width = 800;
-    canvas.height = 600;
-    
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-    context.strokeStyle = selectedColor;
-    context.lineWidth = brushSize;
-    contextRef.current = context;
-
-    socket.on('draw', (data: { 
-      x: number; 
-      y: number; 
-      drawing: boolean;
-      color: string;
-      size: number;
-      lastPosition: { x: number; y: number } | null;
-    }) => {
-      const context = contextRef.current;
+    socket.on('draw', (data: DrawData) => {
+      if (!canvasRef.current) return;
+      const context = canvasRef.current.getContext('2d');
       if (!context) return;
 
-      context.strokeStyle = data.color;
-      context.lineWidth = data.size;
-      
-      if (data.lastPosition && data.drawing) {
-        context.beginPath();
-        context.moveTo(data.lastPosition.x, data.lastPosition.y);
-        context.lineTo(data.x, data.y);
-        context.stroke();
-      }
+      draw(context, data);
     });
 
     return () => {
       socket.off('draw');
     };
-  }, [socket, selectedColor, brushSize]);
+  }, [socket]);
 
-  const startDrawing = ({ nativeEvent }: React.MouseEvent) => {
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
-    const { offsetX, offsetY } = nativeEvent;
-    lastPositionRef.current = { x: offsetX, y: offsetY };
-    setDrawing(true);
+    setIsDrawing(true);
+    const { offsetX, offsetY } = e.nativeEvent;
+    const drawData = {
+      x: offsetX,
+      y: offsetY,
+      color: selectedColor,
+      brushSize,
+      roomId
+    };
+    socket.emit('draw', drawData);
+    draw(context!, drawData);
   };
 
   const draw = ({ nativeEvent }: React.MouseEvent) => {
@@ -104,7 +87,7 @@ export default function Canvas({
     <div className="relative">
       <canvas
         ref={canvasRef}
-        onMouseDown={startDrawing}
+        onMouseDown={handleMouseDown}
         onMouseMove={draw}
         onMouseUp={stopDrawing}
         onMouseOut={stopDrawing}
