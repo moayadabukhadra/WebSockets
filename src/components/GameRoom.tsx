@@ -57,59 +57,84 @@ export default function GameRoom({
       return;
     }
 
-    const newSocket = io('http://localhost:3000');
-    setSocket(newSocket);
-
-    // Send initial connection data
-    newSocket.emit('joinGame', {
-      roomCode,
-      playerId,
-      playerName,
-      isHost
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000';
+    console.log('Connecting to socket server:', socketUrl);
+    
+    const newSocket = io(socketUrl, {
+      transports: ['websocket'],
+      query: {
+        roomCode,
+        playerId,
+        playerName,
+        isHost
+      }
+    });
+    
+    // Add connection event handlers
+    newSocket.on('connect', () => {
+      console.log('Socket connected with ID:', newSocket.id);
+      
+      // Join game room after connection
+      newSocket.emit('joinGame', {
+        roomCode,
+        playerId,
+        playerName,
+        isHost
+      });
     });
 
-    // Add all event listeners
+    // Game event handlers with improved logging
+    newSocket.on('gameStarted', (data) => {
+      console.log('Game started event received:', data);
+      setIsStarting(false);
+      setGameState(prev => ({
+        ...prev,
+        roundNumber: data.roundNumber,
+        totalRounds: data.totalRounds,
+        timeLeft: 60
+      }));
+    });
+
+    newSocket.on('gameState', (state) => {
+      console.log('Game state received:', state);
+      setGameState(state);
+      // Force re-render of child components
+      setSelectedColor(prev => prev);
+    });
+
+    // Add error handling
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setError('Failed to connect to game server');
+    });
+
     newSocket.on('error', ({ message }) => {
       console.error('Socket error:', message);
       setError(message);
-    });
-
-    newSocket.on('players', (updatedPlayers: Player[]) => {
-      console.log('Players updated:', updatedPlayers);
-      setPlayers(updatedPlayers);
-    });
-
-    newSocket.on('gameState', (state: GameState) => {
-      console.log('Game state updated:', state);
-      setGameState(state);
-    });
-
-    newSocket.on('gameStarted', ({ roundNumber, totalRounds }) => {
-      console.log(`Game started! Round ${roundNumber} of ${totalRounds}`);
       setIsStarting(false);
     });
 
-    newSocket.on('roundChange', ({ roundNumber, totalRounds }) => {
-      console.log(`Round ${roundNumber} of ${totalRounds}`);
-    });
-
-    newSocket.on('gameOver', ({ winner }) => {
-      console.log(`Game Over! Winner: ${winner.name}`);
-    });
+    setSocket(newSocket);
 
     return () => {
+      console.log('Cleaning up socket connection');
       newSocket.close();
     };
   }, [roomCode, playerId, isHost]);
 
   const handleStartGame = async () => {
-    if (!socket || isStarting || !roomCode) return;
+    if (!socket || isStarting || !roomCode) {
+      console.log('Cannot start game:', { 
+        socketExists: !!socket, 
+        isStarting, 
+        roomCode 
+      });
+      return;
+    }
     
+    console.log('Emitting startGame event:', { roomCode, playerId });
     setIsStarting(true);
     socket.emit('startGame', { roomCode, playerId });
-    
-    // Reset starting state after a delay
-    setTimeout(() => setIsStarting(false), 2000);
   };
 
   if (error) {
@@ -123,6 +148,14 @@ export default function GameRoom({
   }
 
   const isCurrentDrawer = gameState.drawer === playerId;
+
+  console.log('Current game state:', {
+    gameState,
+    players,
+    isHost,
+    playerId,
+    isCurrentDrawer: gameState.drawer === playerId
+  });
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">

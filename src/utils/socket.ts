@@ -14,6 +14,7 @@ interface GameState {
   roundNumber: number;
   totalRounds: number;
   drawer: string | null;
+  isDrawing: boolean;
 }
 
 interface Room {
@@ -28,11 +29,34 @@ interface Room {
   timer: NodeJS.Timeout | null;
 }
 
+const DEBUG = true;
+
+const log = (...args: any[]) => {
+  if (DEBUG) {
+    console.log(...args);
+  }
+};
+
 const words = [
   'apple', 'banana', 'cat', 'dog', 'elephant',
   'fish', 'giraffe', 'house', 'ice cream', 'jungle',
   // Add more words here
 ];
+
+const createGameState = (drawer: string, word: string, roundNumber: number, totalRounds: number): GameState => ({
+  currentWord: word,
+  timeLeft: 60,
+  roundNumber,
+  totalRounds,
+  drawer,
+  isDrawing: false
+});
+
+const getPlayerGameState = (gameState: GameState, playerId: string): GameState => ({
+  ...gameState,
+  isDrawing: gameState.drawer === playerId,
+  currentWord: gameState.drawer === playerId ? gameState.currentWord : '_ '.repeat(gameState.currentWord.length)
+});
 
 export function initSocket(server: NetServer) {
   const io = new SocketIOServer(server, {
@@ -44,36 +68,68 @@ export function initSocket(server: NetServer) {
 
   const rooms = new Map<string, Room>();
 
-  const loadRoomState = async (roomCode: string) => {
-    const dbRoom = await db.getRoomByCode(roomCode);
-    if (!dbRoom) return null;
+  const loadRoomState = async (roomCode: string): Promise<Room | undefined> => {
+    try {
+      const dbRoom = await db.getRoomByCode(roomCode);
+      if (!dbRoom) return undefined;
 
-    const currentGame = await db.getCurrentGame(dbRoom.id);
+      const currentGame = await db.getCurrentGame(dbRoom.id);
 
-    const room: Room = {
-      id: dbRoom.id,
-      name: dbRoom.name,
-      players: dbRoom.players.map((p: { id: string; name: string; score: number; isHost: boolean }) => ({
-        id: p.id,
-        name: p.name,
-        score: p.score
-      })),
-      gameState: {
-        currentWord: currentGame?.word || '',
-        timeLeft: 60,
-        roundNumber: currentGame?.round || 1,
-        totalRounds: dbRoom.rounds,
-        drawer: currentGame?.drawerId || null
-      },
-      host: dbRoom.players.find((p: { id: string; isHost: boolean }) => p.isHost)?.id || '',
-      settings: {
-        totalRounds: dbRoom.rounds
-      },
-      timer: null
-    };
+      const room: Room = {
+        id: dbRoom.id,
+        name: dbRoom.name,
+        players: dbRoom.players.map((p: { id: string; name: string; score: number; isHost: boolean }) => ({
+          id: p.id,
+          name: p.name,
+          score: p.score
+        })),
+        gameState: {
+          currentWord: currentGame?.word || '',
+          timeLeft: 60,
+          roundNumber: currentGame?.round || 1,
+          totalRounds: dbRoom.rounds,
+          drawer: currentGame?.drawerId || null,
+          isDrawing: false
+        },
+        host: dbRoom.players.find((p: { id: string; isHost: boolean }) => p.isHost)?.id || '',
+        settings: {
+          totalRounds: dbRoom.rounds
+        },
+        timer: null
+      };
 
-    rooms.set(roomCode, room);
-    return room;
+      return room;
+    } catch (error) {
+      console.error('Error loading room state:', error);
+      return undefined;
+    }
+  };
+
+  const joinRoom = async (socket: any, roomCode: string, playerId: string, playerName: string): Promise<Room | undefined> => {
+    try {
+      let room = rooms.get(roomCode);
+      
+      if (!room) {
+        room = await loadRoomState(roomCode);
+        if (!room) {
+          socket.emit('error', { message: 'Room not found' });
+          return undefined;
+        }
+        rooms.set(roomCode, room);
+      }
+
+      // Join socket room
+      socket.join(roomCode);
+      
+      // Update socket ID in database
+      await db.updatePlayer(playerId, { socketId: socket.id });
+      
+      return room;
+    } catch (error) {
+      console.error('Error joining room:', error);
+      socket.emit('error', { message: 'Failed to join room' });
+      return undefined;
+    }
   };
 
   const selectNewWord = () => {
@@ -81,23 +137,31 @@ export function initSocket(server: NetServer) {
   };
 
   const updateTimer = (room: Room) => {
-    if (room.timer) clearInterval(room.timer);
+    // Clear existing timer if any
+    if (room.timer) {
+      clearInterval(room.timer);
+    }
 
+    // Reset time
     room.gameState.timeLeft = 60;
+
+    // Create new timer
     room.timer = setInterval(() => {
+      // Decrement time
       room.gameState.timeLeft--;
 
-      // Send different states to drawer and other players
+      // Broadcast updated time to all players
       room.players.forEach(player => {
-        const isDrawer = player.id === room.gameState.drawer;
-        io.to(player.id).emit('gameState', {
-          ...room.gameState,
-          isDrawing: isDrawer,
-          currentWord: isDrawer ? room.gameState.currentWord : '_ '.repeat(room.gameState.currentWord.length)
-        });
+        const playerState = getPlayerGameState(room.gameState, player.id);
+        io.to(player.id).emit('gameState', playerState);
       });
 
+      // Check if time's up
       if (room.gameState.timeLeft <= 0) {
+        clearInterval(room.timer!);
+        room.timer = null;
+        
+        // Move to next turn
         nextTurn(room);
       }
     }, 1000);
@@ -165,39 +229,25 @@ export function initSocket(server: NetServer) {
   };
 
   io.on('connection', (socket) => {
-    console.log('Client connected');
+    console.log('New socket connection:', socket.id);
 
     socket.on('joinGame', async ({ roomCode, playerId, playerName, isHost }) => {
       try {
-        const room = rooms.get(roomCode) || await loadRoomState(roomCode);
-        if (!room) {
-          socket.emit('error', { message: 'Room not found' });
-          return;
+        const room = await joinRoom(socket, roomCode, playerId, playerName);
+        if (!room) return;
+
+        // Emit current game state if game is in progress
+        if (room.gameState.drawer) {
+          const playerState = getPlayerGameState(room.gameState, playerId);
+          socket.emit('gameState', playerState);
         }
 
-        // Update the socket ID for the player
-        await db.updatePlayerSocket(playerId, socket.id);
-
-        // Update room state
-        const existingPlayer = room.players.find(p => p.id === playerId);
-        if (!existingPlayer) {
-          room.players.push({
-            id: playerId, // Use playerId instead of socket.id
-            name: playerName,
-            score: 0
-          });
-
-          if (isHost) {
-            room.host = playerId;
-          }
-        }
-
-        socket.join(roomCode);
-        socket.emit('gameState', room.gameState);
+        // Emit current players
         io.to(roomCode).emit('players', room.players);
-        await db.addMessage(room.id, playerId, `${playerName} has joined the game!`, 'system');
+        
+        console.log(`Player ${playerName} joined room ${roomCode}`);
       } catch (error) {
-        console.error('Error joining game:', error);
+        console.error('Error in joinGame:', error);
         socket.emit('error', { message: 'Failed to join game' });
       }
     });
@@ -321,80 +371,105 @@ export function initSocket(server: NetServer) {
 
     socket.on('startGame', async ({ roomCode, playerId }) => {
       try {
-        console.log('Starting game for room:', roomCode, 'Player:', playerId);
+        console.log('Start game request received:', { roomCode, playerId });
         const room = rooms.get(roomCode);
+        
         if (!room) {
           console.error('Room not found:', roomCode);
           socket.emit('error', { message: 'Room not found' });
           return;
         }
 
-        // Get the player from the players array using the provided playerId
-        const player = room.players.find(p => p.id === playerId);
-        console.log('Player found:', player, 'Host:', room.host);
-        if (!player || room.host !== playerId) {
+        // Validate host status
+        if (room.host !== playerId) {
+          console.error('Unauthorized start game attempt:', playerId);
           socket.emit('error', { message: 'Only the host can start the game' });
           return;
         }
 
-        // Make sure we have players
-        if (room.players.length < 1) {
-          socket.emit('error', { message: 'Not enough players to start the game' });
+        // Validate player count
+        if (room.players.length < 2) {
+          socket.emit('error', { message: 'Need at least 2 players to start' });
           return;
         }
 
-        // Initialize game state with first player as drawer
+        console.log('Starting game for room:', roomCode);
+
+        // Select first drawer and word
         const firstDrawer = room.players[0].id;
         const firstWord = selectNewWord();
-        console.log('First drawer:', firstDrawer, 'Word:', firstWord);
 
-        room.gameState = {
-          currentWord: firstWord,
-          timeLeft: 60,
-          roundNumber: 1,
-          totalRounds: room.settings.totalRounds,
-          drawer: firstDrawer
-        };
+        console.log('First drawer and word:', { firstDrawer, firstWord });
 
-        // Create first game round in database
-        const game = await db.createGame(
-          room.id,
+        // Create initial game state
+        const initialGameState = createGameState(
           firstDrawer,
           firstWord,
-          room.gameState.roundNumber
+          1,
+          room.settings.totalRounds
         );
 
-        // Add all players to the game
-        await Promise.all(
-          room.players.map(player => db.addPlayerToGame(game.id, player.id))
-        );
+        // Update room's game state
+        room.gameState = initialGameState;
+
+        try {
+          // Create game in database
+          const game = await db.createGame(
+            room.id,
+            firstDrawer,
+            firstWord,
+            1
+          );
+
+          // Add all players to the game
+          await Promise.all(
+            room.players.map(player => db.addPlayerToGame(game.id, player.id))
+          );
+        } catch (dbError) {
+          console.error('Database error:', dbError);
+          // Continue even if database operations fail
+        }
+
+        // Notify room that game has started
+        io.to(roomCode).emit('gameStarted', {
+          roundNumber: 1,
+          totalRounds: room.settings.totalRounds
+        });
+
+        // Send individual game states to each player
+        room.players.forEach(player => {
+          const playerState = getPlayerGameState(initialGameState, player.id);
+          console.log('Sending game state to player:', { playerId: player.id, state: playerState });
+          io.to(player.id).emit('gameState', playerState);
+        });
 
         // Start the timer
         updateTimer(room);
 
-        // Notify all players that the game has started
-        io.to(roomCode).emit('gameStarted', {
-          roundNumber: room.gameState.roundNumber,
-          totalRounds: room.settings.totalRounds
-        });
+        // Add system message
+        try {
+          await db.addMessage(room.id, firstDrawer, 'Game has started!', 'system');
+        } catch (msgError) {
+          console.error('Error adding system message:', msgError);
+        }
 
-        // Send different states to drawer and other players
-        room.players.forEach(player => {
-          const isDrawer = player.id === firstDrawer;
-          const gameState = {
-            ...room.gameState,
-            isDrawing: isDrawer,
-            currentWord: isDrawer ? firstWord : '_ '.repeat(firstWord.length)
-          };
-          console.log('Sending game state to player:', player.id, gameState);
-          io.to(player.id).emit('gameState', gameState);
-        });
-
-        // Add system message using the first drawer's ID
-        await db.addMessage(room.id, firstDrawer, 'Game has started!', 'system');
+        console.log('Game successfully started for room:', roomCode);
       } catch (error) {
         console.error('Error starting game:', error);
         socket.emit('error', { message: 'Failed to start game' });
+      }
+    });
+
+    // Add draw event handler
+    socket.on('draw', async ({ x, y, color, brushSize, type, roomId }) => {
+      try {
+        const room = Array.from(rooms.values()).find(r => r.id === roomId);
+        if (!room) return;
+
+        // Broadcast draw event to all players in the room except the sender
+        socket.to(room.id).emit('draw', { x, y, color, brushSize, type });
+      } catch (error) {
+        console.error('Error handling draw event:', error);
       }
     });
   });
