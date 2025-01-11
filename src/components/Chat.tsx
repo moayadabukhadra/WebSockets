@@ -7,6 +7,8 @@ interface ChatProps {
   socket: Socket;
   isDrawing: boolean;
   roomId: string;
+  roomCode: string;
+  playerId: string;
 }
 
 interface Message {
@@ -16,40 +18,57 @@ interface Message {
   isDrawer?: boolean;
 }
 
-export default function Chat({ socket, isDrawing, roomId }: ChatProps) {
+export default function Chat({ socket, isDrawing, roomId, roomCode, playerId }: ChatProps) {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    socket.on('message', (msg: Message) => {
-      setMessages(prev => [...prev, msg]);
-    });
+    if (!socket) return;
 
-    socket.on('correctGuess', (data: { guesser: string; word: string; timeBonus: number }) => {
-      setMessages(prev => [...prev, {
-        type: 'correct',
-        content: `🎉 ${data.guesser} correctly guessed the word "${data.word}"! (+${data.timeBonus} time bonus)`
-      }]);
-    });
+    const handleMessage = (msg: Message) => {
+      console.log('Received message:', msg);
+      setMessages(prev => [...prev, msg]);
+    };
+
+    const handleCorrectGuess = (data: { guesser: string; word: string; timeBonus: number }) => {
+      console.log('Correct guess:', data);
+      setMessages(prev => [
+        ...prev,
+        {
+          type: 'correct',
+          content: `🎉 ${data.guesser} correctly guessed "${data.word}"! (+${data.timeBonus} bonus points)`
+        }
+      ]);
+    };
+
+    socket.on('message', handleMessage);
+    socket.on('correctGuess', handleCorrectGuess);
 
     return () => {
-      socket.off('message');
-      socket.off('correctGuess');
+      socket.off('message', handleMessage);
+      socket.off('correctGuess', handleCorrectGuess);
     };
   }, [socket]);
 
+  const sendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || !socket || isDrawing) return;
+
+    console.log('Sending guess:', { roomCode, message, playerId });
+    socket.emit('guess', {
+      roomCode,
+      message: message.trim(),
+      playerId
+    });
+
+    setMessage('');
+  };
+
+  // Scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const sendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!message.trim() || isDrawing) return;
-    
-    socket.emit('guess', message);
-    setMessage('');
-  };
 
   return (
     <div className="bg-gray-800 p-4 rounded-lg shadow-lg">

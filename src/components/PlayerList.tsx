@@ -10,9 +10,11 @@ interface PlayerListProps {
 }
 
 export default function PlayerList({ players, currentDrawer }: PlayerListProps) {
+  console.log('PlayerList render:', { players, currentDrawer });
+
   return (
     <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
-      <h2 className="text-xl font-bold mb-4">Players</h2>
+      <h2 className="text-xl font-bold mb-4">Players ({players.length})</h2>
       <div className="space-y-2">
         {players.map((player) => (
           <div

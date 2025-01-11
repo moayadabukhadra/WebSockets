@@ -9,6 +9,7 @@ interface CanvasProps {
   selectedColor: string;
   brushSize: number;
   roomId: string;
+  roomCode: string;
 }
 
 interface DrawData {
@@ -24,13 +25,15 @@ export default function Canvas({
   isDrawing, 
   selectedColor, 
   brushSize,
-  roomId
+  roomId,
+  roomCode
 }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const [isDrawingActive, setIsDrawingActive] = useState(false);
   const lastPositionRef = useRef<{ x: number; y: number } | null>(null);
 
+  // Initialize canvas
   useEffect(() => {
     if (!canvasRef.current) return;
     
@@ -39,8 +42,11 @@ export default function Canvas({
     if (!context) return;
 
     // Set canvas size
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    canvas.width = canvas.offsetWidth * 2; // Double for retina displays
+    canvas.height = canvas.offsetHeight * 2;
+    canvas.style.width = `${canvas.offsetWidth}px`;
+    canvas.style.height = `${canvas.offsetHeight}px`;
+    context.scale(2, 2); // Scale for retina displays
 
     // Set initial styles
     context.lineCap = 'round';
@@ -49,130 +55,128 @@ export default function Canvas({
     context.lineWidth = brushSize;
     
     contextRef.current = context;
+  }, []); // Only run once on mount
 
-    // Listen for draw events from other players
-    socket.on('draw', (data: DrawData) => {
-      if (!contextRef.current) return;
+  // Update drawing styles when they change
+  useEffect(() => {
+    if (!contextRef.current) return;
+    contextRef.current.strokeStyle = selectedColor;
+    contextRef.current.lineWidth = brushSize;
+  }, [selectedColor, brushSize]);
+
+  // Socket event listeners
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleDraw = (data: DrawData) => {
+      console.log('Received draw event:', data);
+      if (!contextRef.current || !canvasRef.current) return;
+      
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      
+      const x = (data.x * scaleX) / 2;
+      const y = (data.y * scaleY) / 2;
       
       const ctx = contextRef.current;
       ctx.strokeStyle = data.color;
       ctx.lineWidth = data.brushSize;
 
       if (data.type === 'start') {
+        console.log('Starting new path at:', { x, y });
         ctx.beginPath();
-        ctx.moveTo(data.x, data.y);
+        ctx.moveTo(x, y);
       } else if (data.type === 'draw') {
-        ctx.lineTo(data.x, data.y);
+        console.log('Drawing line to:', { x, y });
+        ctx.lineTo(x, y);
         ctx.stroke();
-      } else if (data.type === 'end') {
-        ctx.closePath();
       }
-    });
+    };
 
-    // Clean up socket listener
+    socket.on('draw', handleDraw);
+
     return () => {
-      socket.off('draw');
+      socket.off('draw', handleDraw);
     };
-  }, [socket, selectedColor, brushSize]);
+  }, [socket]);
 
-  const getCanvasCoordinates = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const startDrawing = ({ nativeEvent }: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing || !contextRef.current || !canvasRef.current) return;
+
     const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-
     const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
-  };
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    const x = (nativeEvent.offsetX * scaleX) / 2;
+    const y = (nativeEvent.offsetY * scaleY) / 2;
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !contextRef.current) return;
-    
-    const { x, y } = getCanvasCoordinates(e);
-    setIsDrawingActive(true);
-    
-    // Start new path
     contextRef.current.beginPath();
     contextRef.current.moveTo(x, y);
+    setIsDrawingActive(true);
     lastPositionRef.current = { x, y };
 
-    // Emit draw start event
+    // Emit draw start event with unscaled coordinates
     socket.emit('draw', {
-      x,
-      y,
+      x: nativeEvent.offsetX,
+      y: nativeEvent.offsetY,
       color: selectedColor,
       brushSize,
       type: 'start',
-      roomId
+      roomId,
+      roomCode
     });
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !isDrawingActive || !contextRef.current || !lastPositionRef.current) return;
+  const draw = ({ nativeEvent }: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawingActive || !isDrawing || !contextRef.current || !lastPositionRef.current) return;
 
-    const { x, y } = getCanvasCoordinates(e);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     
-    // Draw line
-    contextRef.current.strokeStyle = selectedColor;
-    contextRef.current.lineWidth = brushSize;
+    const x = (nativeEvent.offsetX * scaleX) / 2;
+    const y = (nativeEvent.offsetY * scaleY) / 2;
+
     contextRef.current.lineTo(x, y);
     contextRef.current.stroke();
-    
-    // Emit draw event
+    lastPositionRef.current = { x, y };
+
+    // Emit draw event with scaled coordinates
     socket.emit('draw', {
-      x,
-      y,
+      x: nativeEvent.offsetX, // Send unscaled coordinates
+      y: nativeEvent.offsetY,
       color: selectedColor,
       brushSize,
       type: 'draw',
-      roomId
+      roomId,
+      roomCode
     });
-
-    lastPositionRef.current = { x, y };
   };
 
-  const handleDrawingEnd = () => {
-    if (!isDrawingActive) return;
-    
+  const stopDrawing = () => {
+    if (!contextRef.current) return;
+    contextRef.current.closePath();
     setIsDrawingActive(false);
-    if (contextRef.current) {
-      contextRef.current.closePath();
-    }
-
-    // Emit draw end event
-    if (lastPositionRef.current) {
-      socket.emit('draw', {
-        x: lastPositionRef.current.x,
-        y: lastPositionRef.current.y,
-        color: selectedColor,
-        brushSize,
-        type: 'end',
-        roomId
-      });
-    }
-    
     lastPositionRef.current = null;
   };
 
   return (
-    <div className="relative">
-      <canvas
-        ref={canvasRef}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleDrawingEnd}
-        onMouseOut={handleDrawingEnd}
-        className="w-full border border-gray-700 rounded-lg bg-white"
-        style={{ aspectRatio: '4/3' }}
-      />
-      {!isDrawing && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
-          <p className="text-white text-xl font-bold">
-            Waiting for your turn...
-          </p>
-        </div>
-      )}
-    </div>
+    <canvas
+      ref={canvasRef}
+      className={`w-full border border-gray-700 rounded-lg bg-white ${
+        !isDrawing ? 'cursor-default' : 'cursor-crosshair'
+      }`}
+      style={{ aspectRatio: '16/9' }}
+      onMouseDown={startDrawing}
+      onMouseMove={draw}
+      onMouseUp={stopDrawing}
+      onMouseLeave={stopDrawing}
+    />
   );
 } 
