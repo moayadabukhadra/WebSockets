@@ -2,11 +2,21 @@
 
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { useRouter } from 'next/navigation';
 import Canvas from './Canvas';
 import Chat from './Chat';
 import PlayerList from './PlayerList';
 import ToolBar from './ToolBar';
-import Toast from './Toast';
+import { useAlert } from '@/contexts/AlertContext';
+import {
+  Player,
+  GameState,
+  PlayerPowerUps,
+  GameStartData,
+  RoundChangeData,
+  GameOverData,
+  PowerUpUsedData
+} from '@/types/game';
 
 interface GameRoomProps {
   roomId: string;
@@ -15,35 +25,13 @@ interface GameRoomProps {
   isHost: boolean;
 }
 
-type Player = {
-  id: string;
-  name: string;
-  score: number;
-};
-
-type GameState = {
-  currentWord: string;
-  timeLeft: number;
-  roundNumber: number;
-  totalRounds: number;
-  drawer: string | null;
-  isDrawing: boolean;
-  isGameOver: boolean;
-  finalScores: { name: string; score: number }[];
-};
-
-interface Toast {
-  id: number;
-  message: string;
-  type: 'success' | 'info' | 'warning';
-}
-
-export default function GameRoom({ 
-  roomId, 
-  roomCode, 
-  playerId, 
-  isHost 
+export default function GameRoom({
+  roomId,
+  roomCode,
+  playerId,
+  isHost
 }: GameRoomProps) {
+  const router = useRouter();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [gameState, setGameState] = useState<GameState>({
@@ -54,22 +42,20 @@ export default function GameRoom({
     drawer: null,
     isDrawing: false,
     isGameOver: false,
-    finalScores: []
+    finalScores: [],
+    wordHints: [],
+    powerUps: {
+      timeBonus: 2,
+      revealLetter: 2,
+      clearCanvas: 1
+    },
+    revealedLetters: new Set()
   });
   const [selectedColor, setSelectedColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(2);
   const [error, setError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const addToast = (message: string, type: 'success' | 'info' | 'warning') => {
-    const newToast = {
-      id: Date.now(),
-      message,
-      type
-    };
-    setToasts(prev => [...prev.filter(t => t.type !== type), newToast]);
-  };
+  const { showAlert } = useAlert();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem('playerName');
@@ -80,7 +66,7 @@ export default function GameRoom({
 
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000';
     console.log('Connecting to socket server:', socketUrl);
-    
+
     const newSocket = io(socketUrl, {
       transports: ['websocket'],
       query: {
@@ -90,11 +76,11 @@ export default function GameRoom({
         isHost
       }
     });
-    
+
     // Add connection event handlers
     newSocket.on('connect', () => {
       console.log('Socket connected with ID:', newSocket.id);
-      
+
       // Join game room after connection
       newSocket.emit('joinGame', {
         roomCode,
@@ -105,37 +91,76 @@ export default function GameRoom({
     });
 
     // Game event handlers with improved logging
-    newSocket.on('gameStarted', (data) => {
+    newSocket.on('gameStarted', (data: {
+      word?: string;
+      timeLeft?: number;
+      roundNumber?: number;
+      totalRounds?: number;
+      drawer?: string;
+      drawerName: string;
+      players?: PlayerPowerUps[];
+    }) => {
       console.log('Game started event received:', data);
       setIsStarting(false);
+      
+      const roundNumber = data.roundNumber ?? 1; // Use nullish coalescing for proper type handling
+      
       setGameState(prevState => ({
         ...prevState,
         currentWord: data.word || '',
         timeLeft: data.timeLeft || 60,
-        roundNumber: data.roundNumber || 1,
+        roundNumber,
         totalRounds: data.totalRounds || 3,
         drawer: data.drawer || null,
-        isDrawing: data.drawer === playerId
+        isDrawing: data.drawer === playerId,
+        isGameOver: false,
+        finalScores: [],
+        wordHints: [],
+        powerUps: data.players?.find(p => p.id === playerId)?.powerUps || prevState.powerUps,
+        revealedLetters: new Set()
       }));
 
       if (data.drawer === playerId) {
-        addToast("It's your turn to draw!", 'success');
+        showAlert("It's your turn to draw!", 'success');
       } else {
-        addToast(`${data.drawerName} is drawing now!`, 'info');
+        showAlert(`${data.drawerName} is drawing now!`, 'info');
       }
 
-      if (data.roundNumber > 1) {
-        addToast(`Round ${data.roundNumber} started!`, 'warning');
+      if (data.roundNumber && data.roundNumber > 1) {
+        showAlert(`Round ${data.roundNumber} started!`, 'info');
       }
     });
 
     newSocket.on('gameState', (state) => {
-      console.log('Game state received:', state);
-      setGameState(prevState => ({
-        ...prevState,
-        ...state,
-        isDrawing: state.drawer === playerId
-      }));
+      setGameState(prevState => {
+        // Ensure revealedLetters is properly converted to a Set
+        let newRevealedLetters;
+        if (state.revealedLetters) {
+          try {
+            // Handle both array and object cases
+            const letters = Array.isArray(state.revealedLetters) 
+              ? state.revealedLetters 
+              : Object.values(state.revealedLetters);
+            newRevealedLetters = new Set(letters);
+          } catch (error) {
+            console.error('Error converting revealedLetters to Set:', error);
+            newRevealedLetters = prevState.revealedLetters;
+          }
+        } else {
+          newRevealedLetters = prevState.revealedLetters;
+        }
+
+        return {
+          ...state,
+          isDrawing: state.drawer === playerId,
+          // Keep the user's own power-ups
+          powerUps: prevState.powerUps,
+          wordHints: state.wordHints || prevState.wordHints,
+          revealedLetters: newRevealedLetters,
+          isGameOver: prevState.isGameOver,
+          finalScores: prevState.finalScores
+        };
+      });
     });
 
     // Listen for 'playerList' updates from the server
@@ -157,19 +182,72 @@ export default function GameRoom({
     });
 
     // Handle round changes
-    newSocket.on('roundChange', (data) => {
-      addToast(`Round ${data.roundNumber} of ${data.totalRounds}!`, 'warning');
+    newSocket.on('roundChange', (data: { 
+      roundNumber: number; 
+      totalRounds: number;
+      players?: PlayerPowerUps[];
+    }) => {
+      showAlert(`Round ${data.roundNumber} of ${data.totalRounds}!`, 'info');
+      // Update power-ups if they were reset
+      if (data.players) {
+        const playerPowerUps = data.players.find(p => p.id === playerId)?.powerUps;
+        if (playerPowerUps) {
+          setGameState(prev => ({
+            ...prev,
+            powerUps: playerPowerUps
+          }));
+        }
+      }
     });
 
     // Handle game over
-    newSocket.on('gameOver', (data) => {
-      addToast(`Game Over! ${data.winner.name} wins with ${data.winner.score} points!`, 'success');
-      // Show final scores modal
+    newSocket.on('gameOver', (data: {
+      winner: { name: string; score: number };
+      finalScores: { name: string; score: number }[];
+      players?: PlayerPowerUps[];
+    }) => {
+      showAlert(`Game Over! ${data.winner.name} wins with ${data.winner.score} points!`, 'success');
+      // Update power-ups and game state
+      const playerPowerUps = data.players?.find(p => p.id === playerId)?.powerUps;
       setGameState(prev => ({
         ...prev,
         isGameOver: true,
-        finalScores: data.finalScores
+        finalScores: data.finalScores,
+        powerUps: playerPowerUps || prev.powerUps
       }));
+    });
+
+    // Handle power-up effects
+    newSocket.on('powerUpUsed', (data) => {
+      const messages = {
+        timeBonus: '⏰ +15 seconds added to the timer!',
+        revealLetter: '📝 A letter has been revealed!',
+        clearCanvas: '🗑️ Canvas has been cleared!'
+      };
+
+      showAlert(messages[data.type as keyof typeof messages], 'info');
+
+      // Update game state based on power-up type
+      setGameState(prev => ({
+        ...prev,
+        timeLeft: data.type === 'timeBonus' ? prev.timeLeft + 15 : prev.timeLeft,
+        // Only update powerUps if they belong to this user
+        powerUps: data.playerId === playerId ? data.powerUps : prev.powerUps
+      }));
+    });
+
+    // Add error handling for power-ups
+    newSocket.on('powerUpError', (error) => {
+      showAlert(error.message, 'error');
+    });
+
+    // Handle word hints
+    newSocket.on('wordHint', (hint) => {
+      setGameState(prev => ({
+        ...prev,
+        wordHints: [...prev.wordHints, hint]
+      }));
+      showAlert('New hint available! 💡', 'info');
     });
 
     setSocket(newSocket);
@@ -182,17 +260,17 @@ export default function GameRoom({
 
   const handleStartGame = async () => {
     if (!socket || isStarting || !roomCode) {
-      console.log('Cannot start game:', { 
-        socketExists: !!socket, 
-        isStarting, 
-        roomCode 
+      console.log('Cannot start game:', {
+        socketExists: !!socket,
+        isStarting,
+        roomCode
       });
       return;
     }
-    
+
     console.log('Emitting startGame event:', { roomCode, playerId });
     setIsStarting(true);
-    
+
     socket.emit('startGame', { roomCode, playerId }, (response: { status: string; message?: string }) => {
       if (response.status === 'error') {
         console.error('startGame failed:', response.message);
@@ -200,6 +278,13 @@ export default function GameRoom({
         setIsStarting(false);
       }
     });
+  };
+
+  const handleExit = () => {
+    if (socket) {
+      socket.disconnect();
+    }
+    router.push('/');
   };
 
   const GameOverModal = () => {
@@ -220,11 +305,10 @@ export default function GameRoom({
           <h2 className="text-2xl font-bold text-center mb-4">Game Over!</h2>
           <div className="space-y-2 mb-6">
             {gameState.finalScores?.map((score, index) => (
-              <div 
+              <div
                 key={index}
-                className={`flex justify-between items-center p-2 rounded ${
-                  index === 0 ? 'bg-yellow-500/20' : 'bg-gray-700'
-                }`}
+                className={`flex justify-between items-center p-2 rounded ${index === 0 ? 'bg-yellow-500/20' : 'bg-gray-700'
+                  }`}
               >
                 <span>{score.name}</span>
                 <span className="font-bold">{score.score} points</span>
@@ -258,6 +342,102 @@ export default function GameRoom({
     );
   };
 
+  const PowerUps = () => {
+    if (gameState.isGameOver) return null;
+
+    const handleTimeBonus = () => {
+      if (!socket || gameState.powerUps.timeBonus <= 0) return;
+      socket.emit('usePowerUp', { 
+        type: 'timeBonus', 
+        roomCode,
+        playerId 
+      });
+    };
+
+    const handleRevealLetter = () => {
+      if (!socket || gameState.powerUps.revealLetter <= 0 || isCurrentDrawer) return;
+      socket.emit('usePowerUp', { 
+        type: 'revealLetter', 
+        roomCode,
+        playerId 
+      });
+    };
+
+    const handleClearCanvas = () => {
+      if (!socket || gameState.powerUps.clearCanvas <= 0 || !isCurrentDrawer) return;
+      socket.emit('usePowerUp', { 
+        type: 'clearCanvas', 
+        roomCode,
+        playerId 
+      });
+    };
+
+    return (
+      <div className="bg-gray-800 p-4 rounded-lg shadow-lg mb-4">
+        <h2 className="text-xl font-bold mb-3">Power-ups</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={handleTimeBonus}
+            disabled={gameState.powerUps.timeBonus <= 0}
+            className={`flex-1 p-2 rounded-lg transition-colors ${
+              gameState.powerUps.timeBonus > 0 
+                ? 'bg-blue-500 hover:bg-blue-600' 
+                : 'bg-gray-600 cursor-not-allowed'
+            }`}
+            title="Add 15 seconds to the timer"
+          >
+            ⏰ Time Bonus ({gameState.powerUps.timeBonus})
+          </button>
+          {!isCurrentDrawer && (
+            <button
+              onClick={handleRevealLetter}
+              disabled={gameState.powerUps.revealLetter <= 0}
+              className={`flex-1 p-2 rounded-lg transition-colors ${
+                gameState.powerUps.revealLetter > 0 
+                  ? 'bg-green-500 hover:bg-green-600' 
+                  : 'bg-gray-600 cursor-not-allowed'
+              }`}
+              title="Reveal a random letter"
+            >
+              📝 Reveal Letter ({gameState.powerUps.revealLetter})
+            </button>
+          )}
+          {isCurrentDrawer && (
+            <button
+              onClick={handleClearCanvas}
+              disabled={gameState.powerUps.clearCanvas <= 0}
+              className={`flex-1 p-2 rounded-lg transition-colors ${
+                gameState.powerUps.clearCanvas > 0 
+                  ? 'bg-red-500 hover:bg-red-600' 
+                  : 'bg-gray-600 cursor-not-allowed'
+              }`}
+              title="Clear the canvas"
+            >
+              🗑️ Clear Canvas ({gameState.powerUps.clearCanvas})
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const WordHints = () => {
+    if (isCurrentDrawer || gameState.isGameOver) return null;
+
+    return (
+      <div className="mb-4">
+        <h3 className="text-lg font-bold mb-2">Hints:</h3>
+        <div className="flex flex-wrap gap-2">
+          {gameState.wordHints.map((hint, index) => (
+            <span key={index} className="bg-gray-700 px-2 py-1 rounded text-sm">
+              {hint}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -279,10 +459,35 @@ export default function GameRoom({
   });
 
   return (
-    <>
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3 space-y-4">
-          <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white p-4">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl font-bold">Room Code: {roomCode}</h1>
+            {isHost && !gameState.isGameOver && !gameState.drawer && (
+              <button
+                onClick={handleStartGame}
+                disabled={isStarting || players.length < 2}
+                className={`px-4 py-2 rounded-lg font-semibold ${
+                  isStarting || players.length < 2
+                    ? 'bg-gray-600 cursor-not-allowed'
+                    : 'bg-green-500 hover:bg-green-600'
+                }`}
+              >
+                {isStarting ? 'Starting...' : 'Start Game'}
+              </button>
+            )}
+          </div>
+          <button
+            onClick={handleExit}
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg font-semibold transition-colors"
+          >
+            Exit Game
+          </button>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <div className="lg:col-span-3 space-y-4">
+            <PowerUps />
             {isHost && !gameState.drawer && (
               <button
                 onClick={handleStartGame}
@@ -302,60 +507,57 @@ export default function GameRoom({
                 />
               </div>
             )}
+            <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+              {socket && (
+                <Canvas
+                  socket={socket}
+                  isDrawing={isCurrentDrawer}
+                  selectedColor={selectedColor}
+                  brushSize={brushSize}
+                  roomId={roomId}
+                  roomCode={roomCode}
+                />
+              )}
+            </div>
             {socket && (
-              <Canvas 
-                socket={socket} 
+              <Chat
+                socket={socket}
                 isDrawing={isCurrentDrawer}
-                selectedColor={selectedColor}
-                brushSize={brushSize}
                 roomId={roomId}
                 roomCode={roomCode}
+                playerId={playerId}
               />
             )}
           </div>
-          {socket && (
-            <Chat 
-              socket={socket} 
-              isDrawing={isCurrentDrawer} 
-              roomId={roomId}
-              roomCode={roomCode}
-              playerId={playerId}
-            />
-          )}
-        </div>
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
-            <div className="mb-4">
-              <h2 className="text-xl font-bold mb-2">Round {gameState.roundNumber}/{gameState.totalRounds}</h2>
-              <div className="text-2xl font-bold text-purple-400">
-                {gameState.timeLeft}s
+          <div className="lg:col-span-1 space-y-4">
+            <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+              <div className="mb-4">
+                <h2 className="text-xl font-bold mb-2">Round {gameState.roundNumber}/{gameState.totalRounds}</h2>
+                <div className="text-2xl font-bold text-purple-400">
+                  {gameState.timeLeft}s
+                </div>
+              </div>
+              <div className="mb-4">
+                <h2 className="text-xl font-bold mb-2">Current Word</h2>
+                <p className="text-2xl font-mono">
+                  {isCurrentDrawer 
+                    ? gameState.currentWord 
+                    : [...gameState.currentWord].map((letter, index) => 
+                        gameState.revealedLetters?.has(index) 
+                          ? letter 
+                          : '_'
+                      ).join(' ')
+                  }
+                </p>
               </div>
             </div>
-            <div className="mb-4">
-              <h2 className="text-xl font-bold mb-2">Current Word</h2>
-              <p className="text-2xl font-mono">
-                {isCurrentDrawer ? gameState.currentWord : '_ '.repeat(gameState.currentWord.length)}
-              </p>
-            </div>
+            <WordHints />
+            <PlayerList players={players} currentDrawer={gameState.drawer} />
           </div>
-          <PlayerList players={players} currentDrawer={gameState.drawer} />
         </div>
-      </div>
-      
-      {/* Toasts - with vertical stacking */}
-      <div className="fixed top-4 left-1/2 transform -translate-x-1/2 space-y-2">
-        {toasts.map(toast => (
-          <Toast
-            key={toast.id}
-            message={toast.message}
-            type={toast.type}
-            onClose={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
-          />
-        ))}
-      </div>
 
-      {/* Game Over Modal with restart options */}
-      <GameOverModal />
-    </>
+        <GameOverModal />
+      </div>
+    </div>
   );
 } 

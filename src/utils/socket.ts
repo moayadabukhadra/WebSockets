@@ -1,34 +1,13 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { Server as NetServer } from 'http';
 import { db } from '../services/database';
-
-interface Player {
-  id: string;
-  name: string;
-  score: number;
-}
-
-interface GameState {
-  currentWord: string;
-  timeLeft: number;
-  roundNumber: number;
-  totalRounds: number;
-  drawer: string | null;
-  isDrawing: boolean;
-}
-
-interface Room {
-  id: string;
-  code: string;
-  name: string;
-  players: Player[];
-  gameState: GameState;
-  host: string;
-  settings: {
-    totalRounds: number;
-  };
-  timer: NodeJS.Timeout | null;
-}
+import {
+  Player,
+  GameState,
+  Room,
+  GameSettings,
+  DrawData
+} from '@/types/game';
 
 const DEBUG = true;
 
@@ -50,7 +29,16 @@ const createGameState = (drawer: string, word: string, roundNumber: number, tota
   roundNumber,
   totalRounds,
   drawer,
-  isDrawing: false
+  isDrawing: false,
+  isGameOver: false,
+  finalScores: [],
+  revealedLetters: new Set(),
+  wordHints: [],
+  powerUps: {
+    timeBonus: 2,
+    revealLetter: 2,
+    clearCanvas: 1
+  }
 });
 
 const getPlayerGameState = (gameState: GameState, playerId: string): GameState => ({
@@ -74,30 +62,47 @@ export function initSocket(server: NetServer) {
       const dbRoom = await db.getRoomByCode(roomCode);
       if (!dbRoom) return undefined;
 
+      // Get the current game if it exists
+      const currentGame = dbRoom.games?.[0];
+
       const room: Room = {
         id: dbRoom.id,
-        code: roomCode,
+        code: dbRoom.code,
         name: dbRoom.name,
         players: dbRoom.players.map((p: { id: string; name: string; score: number; isHost: boolean }) => ({
           id: p.id,
           name: p.name,
-          score: p.score
+          score: p.score,
+          isHost: p.isHost || false,
+          powerUps: {
+            timeBonus: 2,
+            revealLetter: 2,
+            clearCanvas: 1
+          }
         })),
         gameState: {
-          currentWord: '',
+          currentWord: currentGame?.word || '',
           timeLeft: 60,
-          roundNumber: 1,
-          totalRounds: dbRoom.rounds,
-          drawer: null,
-          isDrawing: false
+          roundNumber: currentGame?.round || 1,
+          totalRounds: dbRoom.rounds || 3,
+          drawer: currentGame?.drawerId || null,
+          isDrawing: false,
+          isGameOver: false,
+          finalScores: [],
+          powerUps: {
+            timeBonus: 2,
+            revealLetter: 2,
+            clearCanvas: 1
+          },
+          revealedLetters: new Set(),
+          wordHints: []
         },
         host: dbRoom.players.find((p: { isHost: boolean }) => p.isHost)?.id || '',
         settings: {
-          totalRounds: dbRoom.rounds
+          totalRounds: dbRoom.rounds || 3
         },
         timer: null
       };
-
       return room;
     } catch (error) {
       console.error('Error loading room state:', error);
@@ -125,7 +130,13 @@ export function initSocket(server: NetServer) {
         room.players.push({
           id: playerId,
           name: playerName,
-          score: 0
+          score: 0,
+          isHost: false,
+          powerUps: {
+            timeBonus: 2,
+            revealLetter: 2,
+            clearCanvas: 1
+          }
         });
       } else {
         // Update existing player's socket
@@ -154,34 +165,22 @@ export function initSocket(server: NetServer) {
   };
 
   const updateTimer = (room: Room) => {
-    // Clear existing timer if any
     if (room.timer) {
       clearInterval(room.timer);
     }
-
-    // Reset time
-    room.gameState.timeLeft = 60;
-
-    // Create new timer
+    
     room.timer = setInterval(() => {
-      // Decrement time
-      room.gameState.timeLeft--;
-
-      // Broadcast time update to all players in the room using roomCode
-      io.to(room.code).emit('gameState', {
-        ...room.gameState,
-        timeLeft: room.gameState.timeLeft
-      });
-
-      console.log('Timer update:', { 
-        roomCode: room.code, 
-        timeLeft: room.gameState.timeLeft 
-      });
-
-      // Check if time's up
-      if (room.gameState.timeLeft <= 0) {
-        clearInterval(room.timer!);
-        room.timer = null;
+      if (room.gameState.timeLeft > 0) {
+        room.gameState.timeLeft--;
+        io.to(room.code).emit('gameState', {
+          ...room.gameState,
+          timeLeft: room.gameState.timeLeft
+        });
+      } else {
+        if (room.timer) {
+          clearInterval(room.timer);
+          room.timer = null;
+        }
         nextTurn(room);
       }
     }, 1000);
@@ -204,10 +203,23 @@ export function initSocket(server: NetServer) {
     // Check if we're starting a new round
     if (nextIndex === 0) {
       room.gameState.roundNumber++;
+      // Reset power-ups for all players at the start of a new round
+      room.players.forEach(player => {
+        player.powerUps = {
+          timeBonus: 2,
+          revealLetter: 2,
+          clearCanvas: 1
+        };
+      });
       // Notify about new round
       io.to(room.code).emit('roundChange', {
         roundNumber: room.gameState.roundNumber,
-        totalRounds: room.settings.totalRounds
+        totalRounds: room.settings.totalRounds,
+        // Send updated power-ups to all players
+        players: room.players.map(p => ({
+          id: p.id,
+          powerUps: p.powerUps
+        }))
       });
     }
 
@@ -217,12 +229,25 @@ export function initSocket(server: NetServer) {
       const sortedPlayers = [...room.players].sort((a, b) => b.score - a.score);
       const winner = sortedPlayers[0];
       
-      // Emit game over event with final scores
+      // Reset power-ups for all players
+      room.players.forEach(player => {
+        player.powerUps = {
+          timeBonus: 2,
+          revealLetter: 2,
+          clearCanvas: 1
+        };
+      });
+
+      // Emit game over event with final scores and reset power-ups
       io.to(room.code).emit('gameOver', {
         winner,
         finalScores: sortedPlayers.map(p => ({
           name: p.name,
           score: p.score
+        })),
+        players: room.players.map(p => ({
+          id: p.id,
+          powerUps: p.powerUps
         }))
       });
 
@@ -233,7 +258,16 @@ export function initSocket(server: NetServer) {
         roundNumber: 1,
         totalRounds: room.settings.totalRounds,
         drawer: null,
-        isDrawing: false
+        isDrawing: false,
+        isGameOver: false,
+        finalScores: [],
+        powerUps: {
+          timeBonus: 2,
+          revealLetter: 2,
+          clearCanvas: 1
+        },
+        revealedLetters: new Set(),
+        wordHints: []
       };
       return;
     }
@@ -247,7 +281,16 @@ export function initSocket(server: NetServer) {
       ...room.gameState,
       drawer: nextDrawer.id,
       currentWord: nextWord,
-      timeLeft: 60
+      timeLeft: 60,
+      revealedLetters: new Set(),
+      wordHints: [],
+      isGameOver: false,
+      finalScores: [],
+      powerUps: {
+        timeBonus: 2,
+        revealLetter: 2,
+        clearCanvas: 1
+      }
     };
 
     // Notify all players
@@ -257,7 +300,11 @@ export function initSocket(server: NetServer) {
       word: nextWord,
       roundNumber: room.gameState.roundNumber,
       totalRounds: room.settings.totalRounds,
-      timeLeft: 60
+      timeLeft: 60,
+      players: room.players.map(p => ({
+        id: p.id,
+        powerUps: p.powerUps
+      }))
     });
 
     // Start the timer for the new turn
@@ -484,8 +531,95 @@ export function initSocket(server: NetServer) {
       }
     });
 
+    // Add power-up handler
+    socket.on('usePowerUp', async ({ type, roomCode, playerId }) => {
+      try {
+        const room = rooms.get(roomCode);
+        if (!room) {
+          socket.emit('powerUpError', { message: 'Room not found' });
+          return;
+        }
+
+        const player = room.players.find(p => p.id === playerId);
+        if (!player) {
+          socket.emit('powerUpError', { message: 'Player not found' });
+          return;
+        }
+
+        // Check if player has any uses left of this power-up
+        if (player.powerUps[type as keyof typeof player.powerUps] <= 0) {
+          socket.emit('powerUpError', { message: 'No uses left of this power-up' });
+          return;
+        }
+
+        // Handle different power-up types
+        switch (type) {
+          case 'timeBonus':
+            // Add 15 seconds to the timer
+            room.gameState.timeLeft += 15;
+            break;
+
+          case 'revealLetter':
+            // Only non-drawers can use reveal letter
+            if (playerId === room.gameState.drawer) {
+              socket.emit('powerUpError', { message: 'Drawer cannot use reveal letter' });
+              return;
+            }
+            // Reveal a random unrevealed letter
+            const word = room.gameState.currentWord;
+            const revealedLetters = room.gameState.revealedLetters || new Set();
+            const unrevealedIndices = [...word].map((_, i) => i).filter(i => !revealedLetters.has(i));
+            
+            if (unrevealedIndices.length === 0) {
+              socket.emit('powerUpError', { message: 'All letters are already revealed' });
+              return;
+            }
+
+            const randomIndex = unrevealedIndices[Math.floor(Math.random() * unrevealedIndices.length)];
+            room.gameState.revealedLetters = new Set([...revealedLetters, randomIndex]);
+            break;
+
+          case 'clearCanvas':
+            // Only drawer can use clear canvas
+            if (playerId !== room.gameState.drawer) {
+              socket.emit('powerUpError', { message: 'Only the drawer can clear the canvas' });
+              return;
+            }
+            // Emit clear canvas event
+            io.to(roomCode).emit('clearCanvas');
+            break;
+
+          default:
+            socket.emit('powerUpError', { message: 'Invalid power-up type' });
+            return;
+        }
+
+        // Deduct one use from the power-up
+        player.powerUps[type as keyof typeof player.powerUps] -= 1;
+
+        // Emit power-up used event
+        io.to(roomCode).emit('powerUpUsed', { 
+          type,
+          playerId,
+          powerUps: player.powerUps
+        });
+
+        // Update game state with effects but not power-ups
+        io.to(roomCode).emit('gameState', {
+          ...room.gameState,
+          timeLeft: room.gameState.timeLeft,
+          revealedLetters: room.gameState.revealedLetters ? Array.from(room.gameState.revealedLetters) : [],
+          wordHints: room.gameState.wordHints || []
+        });
+
+      } catch (error) {
+        console.error('Error using power-up:', error);
+        socket.emit('powerUpError', { message: 'Failed to use power-up' });
+      }
+    });
+
     // Update the draw event handler
-    socket.on('draw', async ({ x, y, color, brushSize, type, roomId, roomCode }) => {
+    socket.on('draw', async ({ x, y, color, brushSize, type, tool, points, roomId, roomCode }) => {
       try {
         // Try to find room by both roomId and roomCode
         const room = rooms.get(roomCode) || Array.from(rooms.values()).find(r => r.id === roomId);
@@ -494,18 +628,70 @@ export function initSocket(server: NetServer) {
           return;
         }
 
-        console.log('Broadcasting draw event to room:', { roomCode, type, color });
+        console.log('Broadcasting draw event to room:', { roomCode, type, color, tool });
         
-        // Broadcast to the room using roomCode
-        socket.to(roomCode).emit('draw', { 
+        // Broadcast to all clients in the room, including the sender
+        io.in(roomCode).emit('draw', { 
           x,
           y, 
           color, 
-          brushSize, 
-          type 
+          brushSize,
+          type,
+          tool,
+          points
         });
       } catch (error) {
         console.error('Error handling draw event:', error);
+      }
+    });
+
+    // Handle joining drawing rooms
+    socket.on('joinDrawRoom', async ({ roomCode, roomId }) => {
+      try {
+        // Try to find room by both roomId and roomCode
+        let room = rooms.get(roomCode);
+        
+        if (!room) {
+          // Create new room if it doesn't exist
+          room = {
+            id: roomId,
+            code: roomCode,
+            name: `Drawing Room ${roomCode}`,
+            players: [],
+            gameState: {
+              currentWord: '',
+              timeLeft: 60,
+              roundNumber: 1,
+              totalRounds: 3,
+              drawer: null,
+              isDrawing: false,
+              isGameOver: false,
+              finalScores: [],
+              powerUps: {
+                timeBonus: 2,
+                revealLetter: 2,
+                clearCanvas: 1
+              },
+              revealedLetters: new Set(),
+              wordHints: []
+            },
+            host: '',
+            settings: {
+              totalRounds: 3
+            },
+            timer: null
+          };
+          rooms.set(roomCode, room);
+          room = room;
+        }
+
+        // Join socket room
+        socket.join(roomCode);
+        console.log(`Client joined drawing room: ${roomCode}`);
+
+      } catch (error) {
+        console.error('Error joining drawing room:', error);
+        socket.emit('error', { message: 'Failed to join drawing room' });
       }
     });
 
