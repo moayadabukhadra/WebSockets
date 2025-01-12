@@ -1,9 +1,13 @@
 import { db } from '@/services/database';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+
+export interface RouteSegmentConfig {
+  params: { code: string }
+}
 
 export async function GET(
-  request: Request,
-  { params }: { params: { code: string } }
+  request: NextRequest,
+  { params }: RouteSegmentConfig
 ) {
   try {
     console.log('Fetching room with code:', params.code);

@@ -18,9 +18,47 @@ const log = (...args: any[]) => {
 };
 
 const words = [
-  'apple', 'banana', 'cat', 'dog', 'elephant',
-  'fish', 'giraffe', 'house', 'ice cream', 'jungle',
-  // Add more words here
+  // Objects and Items
+  'chair', 'table', 'phone', 'laptop', 'book', 'pencil', 'glasses', 'clock', 'umbrella', 'backpack',
+  
+  // Food and Drinks
+  'pizza', 'coffee', 'burger', 'sushi', 'taco', 'cookie', 'ice cream', 'sandwich', 'pasta', 'cake',
+  
+  // Places
+  'beach', 'mountain', 'park', 'library', 'school', 'hospital', 'airport', 'restaurant', 'mall', 'stadium',
+  
+  // Actions
+  'running', 'dancing', 'singing', 'jumping', 'swimming', 'reading', 'sleeping', 'cooking', 'laughing', 'crying',
+  
+  // Nature
+  'rainbow', 'cloud', 'star', 'moon', 'sun', 'tree', 'flower', 'ocean', 'river', 'forest',
+  
+  // Animals (keeping some)
+  'elephant', 'penguin', 'giraffe', 'dolphin', 'butterfly',
+  
+  // Sports
+  'soccer', 'basketball', 'tennis', 'baseball', 'volleyball', 'golf', 'hockey', 'skateboard', 'surfing', 'boxing',
+  
+  // Emotions
+  'happy', 'sad', 'angry', 'excited', 'scared', 'surprised', 'confused', 'tired', 'proud', 'shy',
+  
+  // Transportation
+  'car', 'bicycle', 'train', 'airplane', 'helicopter', 'boat', 'motorcycle', 'bus', 'truck', 'submarine',
+  
+  // Household
+  'bed', 'sofa', 'mirror', 'window', 'door', 'kitchen', 'bathroom', 'television', 'lamp', 'carpet',
+  
+  // Technology
+  'computer', 'smartphone', 'robot', 'camera', 'headphones', 'keyboard', 'mouse', 'printer', 'tablet', 'watch',
+  
+  // Clothing
+  'shirt', 'pants', 'dress', 'shoes', 'hat', 'jacket', 'socks', 'scarf', 'gloves', 'sunglasses',
+  
+  // Weather
+  'rain', 'snow', 'wind', 'storm', 'sunshine', 'thunder', 'lightning', 'tornado', 'hurricane', 'fog',
+  
+  // Music
+  'guitar', 'piano', 'drum', 'violin', 'microphone', 'trumpet', 'flute', 'saxophone', 'concert', 'orchestra'
 ];
 
 const createGameState = (drawer: string, word: string, roundNumber: number, totalRounds: number): GameState => ({

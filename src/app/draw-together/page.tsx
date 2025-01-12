@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import CollaborativeCanvas from '@/components/CollaborativeCanvas';
 import AdvancedToolBar from '@/components/AdvancedToolBar';
 import { useRouter } from 'next/navigation';
 
-export default function DrawTogether() {
+function DrawTogetherContent() {
   const searchParams = useSearchParams();
   const [selectedTool, setSelectedTool] = useState<string>('brush');
   const [selectedColor, setSelectedColor] = useState('#000000');
@@ -78,5 +78,21 @@ export default function DrawTogether() {
         </div>
       </div>
     </main>
+  );
+}
+
+function LoadingComponent() {
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 text-white p-4 flex items-center justify-center">
+      <div className="text-2xl font-semibold">Loading...</div>
+    </div>
+  );
+}
+
+export default function DrawTogether() {
+  return (
+    <Suspense fallback={<LoadingComponent />}>
+      <DrawTogetherContent />
+    </Suspense>
   );
 } 
